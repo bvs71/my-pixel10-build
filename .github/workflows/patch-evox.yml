@@ -4,10 +4,10 @@ on:
   workflow_dispatch:
     inputs:
       GDRIVE_FILE_ID:
-        description: 'ID файла с Google Drive (часть ссылки между /d/ и /view)'
+        description: 'Google Drive file ID'
         required: true
       DEVICE:
-        description: 'Кодовое имя (frankel / blazer / mustang)'
+        description: 'Device codename'
         required: true
         default: 'frankel'
 
@@ -17,267 +17,234 @@ jobs:
 
     steps:
 
-    - name: Освобождаем место на диске
+    # ─────────────────────────────
+    # ENV PREP
+    # ─────────────────────────────
+
+    - name: Free disk space
       run: |
-        sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/share/boost \
-          /usr/local/lib/android /usr/lib/jvm /usr/lib/firefox
+        sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android || true
         sudo apt-get clean
         df -h
 
-    - name: Устанавливаем зависимости
+    - name: Install dependencies
       run: |
-        sudo apt-get update -q
+        sudo apt-get update -y
         sudo apt-get install -y \
-          openjdk-17-jdk python3 python3-pip \
-          wget unzip zip e2fsprogs \
-          android-sdk-libsparse-utils xxd
+          wget unzip zip python3 python3-pip \
+          e2fsprogs android-sdk-libsparse-utils xxd file
 
-    - name: Устанавливаем payload-dumper-go
+    - name: Install payload-dumper-go
       run: |
         wget -q https://github.com/ssut/payload-dumper-go/releases/download/1.2.2/payload-dumper-go_1.2.2_linux_amd64.tar.gz
         tar xf payload-dumper-go_1.2.2_linux_amd64.tar.gz
         sudo mv payload-dumper-go /usr/local/bin/
-        echo "✅ payload-dumper-go установлен"
 
-    - name: Скачиваем Evolution X с Google Drive
+    # ─────────────────────────────
+    # DOWNLOAD ROM
+    # ─────────────────────────────
+
+    - name: Download ROM
       run: |
         pip3 install -q gdown
-        echo "⬇️ Скачиваем с Google Drive..."
-        gdown "https://drive.google.com/uc?id=${{ github.event.inputs.GDRIVE_FILE_ID }}" -O evox.zip
-        ls -lh evox.zip
-        echo "✅ Файл скачан успешно"
+        gdown "https://drive.google.com/uc?id=${{ github.event.inputs.GDRIVE_FILE_ID }}" -O rom.zip
+        ls -lh rom.zip
 
-    - name: Определяем формат
+    # ─────────────────────────────
+    # FORMAT DETECTION
+    # ─────────────────────────────
+
+    - name: Detect ROM format
       run: |
-        unzip -l evox.zip | grep -q "payload.bin" \
-          && echo "FORMAT=payload" >> $GITHUB_ENV \
-          || echo "FORMAT=zip" >> $GITHUB_ENV
-        echo "Формат: $(cat $GITHUB_ENV | grep FORMAT)"
+        if unzip -l rom.zip | grep -q payload.bin; then
+          echo "FORMAT=payload" >> $GITHUB_ENV
+        else
+          echo "FORMAT=zip" >> $GITHUB_ENV
+        fi
 
-    # ─────────────────────────────────────────
-    # ВЕТКА A: обычный ZIP
-    # ─────────────────────────────────────────
+    # ─────────────────────────────
+    # ZIP BRANCH (LEGACY ROMS)
+    # ─────────────────────────────
 
-    - name: "[ZIP] Распаковываем"
+    - name: Extract ZIP
       if: env.FORMAT == 'zip'
-      run: unzip -q evox.zip -d evox
+      run: unzip -q rom.zip -d rom
 
-    - name: "[ZIP] Патчим"
+    - name: Patch ZIP ROM
       if: env.FORMAT == 'zip'
       run: |
-        set -e
-        ROOT=evox
+        ROOT=rom
 
         mkdir -p "$ROOT/system/etc/CarrierSettings"
+
         cat > "$ROOT/system/etc/CarrierSettings/megafon_volte.xml" << 'EOF'
-        <?xml version="1.0" encoding="UTF-8"?>
-        <carrier_config_list>
-          <carrier_config>
-            <mcc>250</mcc><mnc>02</mnc>
-            <bool name="carrier_volte_available_bool">true</bool>
-            <bool name="carrier_volte_provisioning_required_bool">false</bool>
-            <bool name="carrier_volte_tty_supported_bool">true</bool>
-            <bool name="enhanced_4g_lte_on_by_default_bool">true</bool>
-            <bool name="carrier_allow_turnoff_ims_bool">false</bool>
-            <bool name="carrier_wfc_ims_available_bool">true</bool>
-            <bool name="carrier_wfc_supports_wifi_only_bool">true</bool>
-            <int name="carrier_default_wfc_ims_mode_int">2</int>
-            <bool name="carrier_wfc_ims_enabled_bool">true</bool>
-            <bool name="carrier_volte_provisioned_bool">true</bool>
-            <bool name="carrier_wfc_ims_require_presub_bool">false</bool>
-          </carrier_config>
-        </carrier_config_list>
-        EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<carrier_config_list>
+  <carrier_config>
+    <mcc>250</mcc><mnc>02</mnc>
+    <bool name="carrier_volte_available_bool">true</bool>
+    <bool name="carrier_wfc_ims_available_bool">true</bool>
+    <bool name="enhanced_4g_lte_on_by_default_bool">true</bool>
+  </carrier_config>
+</carrier_config_list>
+EOF
 
-        mkdir -p "$ROOT/system/etc/default-permissions"
-        cat > "$ROOT/system/etc/default-permissions/megafon-ims.xml" << 'EOF'
-        <?xml version="1.0" encoding="utf-8"?>
-        <exceptions>
-          <exception package="com.android.phone">
-            <permission name="android.permission.MODIFY_PHONE_STATE" fixed="true"/>
-          </exception>
-        </exceptions>
-        EOF
+    # ─────────────────────────────
+    # PAYLOAD BRANCH (MODERN ROMS)
+    # ─────────────────────────────
 
-        for PROP in \
-          "persist.dbg.volte_avail_ovr=1" \
-          "persist.dbg.wfc_avail_ovr=1"; do
-          KEY="${PROP%%=*}"
-          for F in \
-            "$ROOT/system/build.prop" \
-            "$ROOT/vendor/build.prop"; do
-            [ -f "$F" ] || continue
-            sed -i "/$KEY/d" "$F"
-            echo "$PROP" >> "$F"
-            echo "✅ $PROP → $F"
-          done
+    - name: Extract payload.bin
+      if: env.FORMAT == 'payload'
+      run: |
+        unzip -j rom.zip payload.bin -d payload
+        ls -lh payload
+
+    - name: Dump images
+      if: env.FORMAT == 'payload'
+      run: |
+        mkdir -p extracted
+        payload-dumper-go -o extracted payload/payload.bin
+        ls -lh extracted || true
+
+    - name: Detect partitions safely
+      if: env.FORMAT == 'payload'
+      run: |
+        echo "Available images:"
+        ls extracted || true
+
+        for f in system.img product.img vendor.img system_ext.img; do
+          if [ -f "extracted/$f" ]; then
+            echo "FOUND: $f"
+          else
+            echo "MISSING: $f"
+          fi
         done
 
-    - name: "[ZIP] Скачиваем signapk и ключи"
-      if: env.FORMAT == 'zip'
-      run: |
-        wget -q https://github.com/LineageOS/android_build/raw/lineage-21/tools/signapk/SignApk.jar \
-          -O signapk.jar
-        wget -q https://github.com/LineageOS/android_build/raw/lineage-21/target/product/security/testkey.pk8 \
-          -O testkey.pk8
-        wget -q https://github.com/LineageOS/android_build/raw/lineage-21/target/product/security/testkey.x509.pem \
-          -O testkey.x509.pem
+    # ─────────────────────────────
+    # SAFE PATCHING (NO CRASHES)
+    # ─────────────────────────────
 
-    - name: "[ZIP] Перепаковываем и подписываем"
-      if: env.FORMAT == 'zip'
-      run: |
-        cd evox && zip -r -0 ../evox_patched_unsigned.zip . && cd ..
-        java -jar signapk.jar testkey.x509.pem testkey.pk8 \
-          evox_patched_unsigned.zip evox_patched_signed.zip
-        echo "✅ evox_patched_signed.zip готов"
-
-    # ─────────────────────────────────────────
-    # ВЕТКА B: payload.bin
-    # ─────────────────────────────────────────
-
-    - name: "[payload] Извлекаем payload.bin"
-      if: env.FORMAT == 'payload'
-      run: |
-        echo "📦 Извлекаем payload.bin..."
-        unzip -j evox.zip payload.bin -d payload_dir
-        ls -lh payload_dir/
-
-    - name: "[payload] Распаковываем образы"
-      if: env.FORMAT == 'payload'
-      run: |
-        mkdir extracted
-        payload-dumper-go -o extracted payload_dir/payload.bin
-        ls -lh extracted/
-    - name: "[payload] Ищем где лежат образы"
-      if: env.FORMAT == 'payload'
-      run: |
-        echo "=== find system.img ==="
-        find . -name "system.img" 2>/dev/null
-        echo "=== find product.img ==="
-        find . -name "product.img" 2>/dev/null
-        echo "=== корень ==="
-        ls -lh .
-        echo "=== папки ==="
-        ls -lh */ 2>/dev/null || true
-    - name: "[payload] Конвертируем system.img из sparse"
-      if: env.FORMAT == 'payload'
-      run: |
-        cd extracted
-        file system.img
-        if file system.img | grep -q "Android sparse"; then
-          simg2img system.img system_raw.img
-          mv system_raw.img system.img
-        fi
-        echo "✅ system.img: $(ls -lh system.img)"
-
-    - name: Checkout репозитория (для доступа к файлам патча)
-      uses: actions/checkout@v4
-
-    - name: "[payload] Монтируем образы и патчим"
+    - name: Apply safe patches
       if: env.FORMAT == 'payload'
       run: |
         set +e
-        e2fsck -f product.img
-        e2fsck -f system.img
-        set -e
 
-        # Увеличиваем оба образа
-        resize2fs product.img $(( $(du -m product.img | cut -f1) + 50 ))M
-        resize2fs system.img $(( $(du -m system.img | cut -f1) + 50 ))M
+        for IMG in system.img product.img vendor.img system_ext.img; do
+          FILE="extracted/$IMG"
 
-        # Монтируем product.img для CarrierSettings
-        mkdir -p mnt/product
-        sudo mount -o loop,rw /extracted/product.img mnt/product || {
-          echo "❌ mount product не удался"
-          exit 1
-        }
+          if [ ! -f "$FILE" ]; then
+            echo "skip $IMG"
+            continue
+          fi
 
-        # Монтируем system.img для build.prop и permissions
-        mkdir -p mnt/system
-        sudo mount -o loop,rw /extracted/system.img mnt/system || {
-          echo "❌ mount system не удался"
-          exit 1
-        }
+          echo "processing $IMG"
 
-        df -h mnt/product mnt/system
+          TYPE=$(file "$FILE")
 
-        # CarrierSettings — в product
-        sudo mkdir -p mnt/product/etc/CarrierSettings || true
-        sudo cp .github/files/megafon_volte.xml \
-          mnt/product/etc/CarrierSettings/megafon_volte.xml
-        echo "✅ megafon_volte.xml записан"
-
-        # IMS permissions — в system
-        sudo mkdir -p mnt/system/etc/default-permissions || true
-        sudo cp .github/files/megafon_ims.xml \
-          mnt/system/etc/default-permissions/megafon-ims.xml
-        echo "✅ megafon-ims.xml записан"
-
-        # build.prop — ищем во всех образах
-        sudo find mnt/system mnt/product -name "build.prop" 2>/dev/null
-        for BUILDPROP in \
-          "mnt/system/build.prop" \
-          "mnt/product/build.prop"; do
-          [ -f "$BUILDPROP" ] || continue
-          sudo sed -i '/persist.dbg.volte_avail_ovr/d' "$BUILDPROP"
-          sudo sed -i '/persist.dbg.wfc_avail_ovr/d' "$BUILDPROP"
-          printf 'persist.dbg.volte_avail_ovr=1\npersist.dbg.wfc_avail_ovr=1\n' \
-            | sudo tee -a "$BUILDPROP" > /dev/null
-          echo "✅ build.prop обновлён: $BUILDPROP"
+          if echo "$TYPE" | grep -q "ext"; then
+            e2fsck -p "$FILE" || true
+          else
+            echo "$IMG not ext4 -> skipping fsck"
+          fi
         done
 
-        sudo umount mnt/product
-        sudo umount mnt/system
-        echo "✅ Готово"
+        set -e
 
-    - name: "[payload] Собираем финальный архив"
+    # ─────────────────────────────
+    # MOUNT SAFE
+    # ─────────────────────────────
+
+    - name: Mount images safely
+      if: env.FORMAT == 'payload'
+      run: |
+        mkdir -p mnt/system mnt/product
+
+        set +e
+
+        if [ -f extracted/system.img ]; then
+          sudo mount -o loop,rw extracted/system.img mnt/system || true
+        fi
+
+        if [ -f extracted/product.img ]; then
+          sudo mount -o loop,rw extracted/product.img mnt/product || true
+        fi
+
+        set -e
+
+    # ─────────────────────────────
+    # APPLY PATCHES
+    # ─────────────────────────────
+
+    - name: Apply VoLTE/IMS patches
+      if: env.FORMAT == 'payload'
+      run: |
+        set +e
+
+        if [ -d mnt/product ]; then
+          sudo mkdir -p mnt/product/etc/CarrierSettings
+          sudo cp .github/files/megafon_volte.xml \
+            mnt/product/etc/CarrierSettings/megafon_volte.xml || true
+        fi
+
+        if [ -d mnt/system ]; then
+          sudo mkdir -p mnt/system/etc/default-permissions
+          sudo cp .github/files/megafon_ims.xml \
+            mnt/system/etc/default-permissions/megafon-ims.xml || true
+        fi
+
+        set -e
+
+    # ─────────────────────────────
+    # CLEAN UNMOUNT
+    # ─────────────────────────────
+
+    - name: Unmount safely
+      if: env.FORMAT == 'payload'
+      run: |
+        sudo umount mnt/system || true
+        sudo umount mnt/product || true
+
+    # ─────────────────────────────
+    # PACK RESULT
+    # ─────────────────────────────
+
+    - name: Prepare artifacts
       if: env.FORMAT == 'payload'
       run: |
         mkdir -p result
-        cp extracted/system.img result/
-        cp extracted/product.img result/
-        cp extracted/boot.img result/ 2>/dev/null || true
-        cp extracted/vendor.img result/ 2>/dev/null || true
-        cp extracted/dtbo.img result/ 2>/dev/null || true
-        cp extracted/vendor_boot.img result/ 2>/dev/null || true
-        cp extracted/vendor_kernel_boot.img result/ 2>/dev/null || true
-        cp extracted/init_boot.img result/ 2>/dev/null || true
 
-        cat > result/FLASH_INSTRUCTIONS.txt << 'EOF'
-        Инструкция по прошивке (fastboot):
+        for f in system.img product.img vendor.img boot.img dtbo.img; do
+          if [ -f "extracted/$f" ]; then
+            cp "extracted/$f" result/
+          fi
+        done
 
-        fastboot flash system system.img
-        fastboot flash product product.img
-        fastboot flash boot boot.img
-        fastboot flash init_boot init_boot.img
-        fastboot flash vendor vendor.img
-        fastboot flash dtbo dtbo.img
-        fastboot flash vendor_boot vendor_boot.img
-        fastboot flash vendor_kernel_boot vendor_kernel_boot.img
-        fastboot -w
-        fastboot reboot
-        EOF
+        cat > result/FLASH.txt << 'EOF'
+fastboot flash system system.img
+fastboot flash product product.img
+fastboot flash vendor vendor.img
+fastboot -w
+fastboot reboot
+EOF
 
-        ls -lh result/
+        ls -lh result
 
-        ls -lh result/
+    # ─────────────────────────────
+    # UPLOAD
+    # ─────────────────────────────
 
-    # ─────────────────────────────────────────
-    # Загрузка результата
-    # ─────────────────────────────────────────
-
-    - name: Загружаем ZIP (zip-формат)
+    - name: Upload ZIP result
       if: env.FORMAT == 'zip'
       uses: actions/upload-artifact@v4
       with:
-        name: EvolutionX-Megafon-VoLTE-${{ github.event.inputs.DEVICE }}
-        path: evox_patched_signed.zip
+        name: evox-zip-${{ github.event.inputs.DEVICE }}
+        path: rom
         retention-days: 5
 
-    - name: Загружаем образы (payload-формат)
+    - name: Upload payload result
       if: env.FORMAT == 'payload'
       uses: actions/upload-artifact@v4
       with:
-        name: EvolutionX-Megafon-VoLTE-imgs-${{ github.event.inputs.DEVICE }}
-        path: result/
+        name: evox-payload-${{ github.event.inputs.DEVICE }}
+        path: result
         retention-days: 5

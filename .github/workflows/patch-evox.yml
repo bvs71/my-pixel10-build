@@ -3,9 +3,6 @@ name: Patch Evolution X — Megafon VoLTE/VoWiFi
 on:
   workflow_dispatch:
     inputs:
-      EVOX_URL:
-        description: 'Прямая ссылка на ZIP Evolution X'
-        required: true
       DEVICE:
         description: 'Кодовое имя (frankel / blazer / mustang)'
         required: true
@@ -47,10 +44,23 @@ jobs:
         which simg2img && echo "✅ simg2img найден"
         which img2simg && echo "✅ img2simg найден"
 
-    - name: Скачиваем Evolution X
+    - name: Скачиваем Evolution X из Releases
       run: |
-        echo "⬇️ Скачиваем прошивку..."
-        wget --server-response -O evox.zip "${{ github.event.inputs.EVOX_URL }}" 2>&1 | head -20
+        # Берём последний релиз из этого же репозитория
+        REPO="${{ github.repository }}"
+        ASSET_URL=$(curl -s \
+          "https://api.github.com/repos/$REPO/releases/latest" \
+          | python3 -c "
+        import sys, json
+        data = json.load(sys.stdin)
+        assets = data.get('assets', [])
+        for a in assets:
+            if a['name'].endswith('.zip'):
+                print(a['browser_download_url'])
+                break
+        ")
+        echo "URL: $ASSET_URL"
+        wget -q --show-progress -O evox.zip "$ASSET_URL"
         ls -lh evox.zip
 
     - name: Определяем формат

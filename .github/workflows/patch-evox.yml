@@ -114,15 +114,15 @@ EOF
               sed -i '/persist.data.iwlan.enable/d' "$F" || true
               sed -i '/persist.ims.volte_enable/d' "$F" || true
 
-              cat >> "$F" << EOF
-# IMS ENABLER
-persist.dbg.volte_avail_ovr=1
-persist.dbg.wfc_avail_ovr=1
-persist.data.iwlan.enable=true
-persist.ims.volte_enable=1
-persist.ims.vt_enable=1
-persist.ims.wfc_enable=1
-EOF
+              printf '%s\n' \
+                '# IMS ENABLER' \
+                'persist.dbg.volte_avail_ovr=1' \
+                'persist.dbg.wfc_avail_ovr=1' \
+                'persist.data.iwlan.enable=true' \
+                'persist.ims.volte_enable=1' \
+                'persist.ims.vt_enable=1' \
+                'persist.ims.wfc_enable=1' >> "$F"
+
               echo "✅ Properties updated in $F"
             else
               echo "⚠️ File not found: $F, skipping"
@@ -142,8 +142,4 @@ EOF
           echo "✅ ROM repacked as patched_rom.zip"
 
       - name: 📤 Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: patched-rom
-          path: patched_rom.zip
-          retention-days: 7
+        uses: actions/upload-artifact@

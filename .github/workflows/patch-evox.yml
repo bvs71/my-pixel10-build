@@ -1,4 +1,4 @@
-name: Patch Evolution X — Megafon VoLTE/VoWiFi (Stable)
+name: ROM Patch Builder — VoLTE/VoWiFi RU
 
 on:
   workflow_dispatch:
@@ -8,16 +8,16 @@ on:
         description: "Google Drive file ID"
       DEVICE:
         required: true
-        default: "frankel"
+        default: "device"
 
 jobs:
-  patch:
+  build:
     runs-on: ubuntu-latest
 
     steps:
 
     # ─────────────────────────────
-    # ENV SETUP
+    # SETUP
     # ─────────────────────────────
 
     - name: Free space
@@ -31,7 +31,7 @@ jobs:
         sudo apt-get update -y
         sudo apt-get install -y \
           wget unzip zip python3 python3-pip \
-          e2fsprogs file xxd android-sdk-libsparse-utils
+          e2fsprogs file xxd
 
     - name: Install payload-dumper-go
       run: |
@@ -62,180 +62,107 @@ jobs:
         fi
 
     # ─────────────────────────────
-    # ZIP PATH (LEGACY)
+    # EXTRACT
     # ─────────────────────────────
 
-    - name: Extract ZIP
+    - name: Extract ZIP ROM
       if: env.FORMAT == 'zip'
       run: unzip -q rom.zip -d rom
 
-    - name: Patch ZIP safely
-      if: env.FORMAT == 'zip'
-      run: |
-        set -e
-        ROOT=rom
-        FILE="$ROOT/system/etc/CarrierSettings/megafon_volte.xml"
-
-        mkdir -p "$(dirname "$FILE")"
-
-        cat > "$FILE" << 'XML'
-<?xml version="1.0" encoding="UTF-8"?>
-<carrier_config_list>
-  <carrier_config>
-    <mcc>250</mcc>
-    <mnc>02</mnc>
-    <bool name="carrier_volte_available_bool">true</bool>
-    <bool name="carrier_wfc_ims_available_bool">true</bool>
-    <bool name="enhanced_4g_lte_on_by_default_bool">true</bool>
-  </carrier_config>
-</carrier_config_list>
-XML
-
-        echo "ZIP patch done"
-
-    # ─────────────────────────────
-    # PAYLOAD PATH (MODERN ROM)
-    # ─────────────────────────────
-
-    - name: Extract payload.bin
+    - name: Extract payload
       if: env.FORMAT == 'payload'
       run: |
         unzip -j rom.zip payload.bin -d payload
         mkdir -p extracted
-
-    - name: Dump images
-      if: env.FORMAT == 'payload'
-      run: |
-        payload-dumper-go -o extracted payload/payload.bin || true
+        payload-dumper-go -o extracted payload/payload.bin
         ls -lh extracted || true
 
     # ─────────────────────────────
-    # SAFE DETECTION ENGINE
+    # PATCH ENGINE
     # ─────────────────────────────
 
-    - name: Detect partitions (safe)
-      if: env.FORMAT == 'payload'
+    - name: Apply VoLTE/VoWiFi patch
       run: |
-        echo "Available images:"
-        for f in extracted/*.img; do
-          [ -e "$f" ] || continue
-          echo "FOUND: $f"
-        done
-
-    # ─────────────────────────────
-    # SAFE PATCH ENGINE (NO CRASH)
-    # ─────────────────────────────
-
-    - name: Safe FS handling (NO FAIL)
-      if: env.FORMAT == 'payload'
-      run: |
-        set +e
-
-        patch_fs () {
-          IMG="$1"
-
-          if [ ! -f "$IMG" ]; then
-            echo "skip $IMG"
-            return
-          fi
-
-          TYPE=$(file "$IMG")
-
-          echo "$IMG -> $TYPE"
-
-          if echo "$TYPE" | grep -q "ext"; then
-            echo "fsck: $IMG"
-            e2fsck -p "$IMG" || true
-          else
-            echo "skip fsck (not ext4): $IMG"
-          fi
-        }
-
-        for f in extracted/system.img extracted/product.img extracted/vendor.img; do
-          patch_fs "$f"
-        done
-
         set -e
 
-    # ─────────────────────────────
-    # SAFE MOUNT (OPTIONAL)
-    # ─────────────────────────────
+        ROOT=rom
+        [ "$FORMAT" = "payload" ] && ROOT=extracted
 
-    - name: Mount safely
-      if: env.FORMAT == 'payload'
-      run: |
-        mkdir -p mnt/system mnt/product
+        echo "📡 Patching ROM in $ROOT"
 
-        set +e
+        mkdir -p "$ROOT/system/etc/CarrierSettings"
 
-        [ -f extracted/system.img ] && sudo mount -o loop,rw extracted/system.img mnt/system || true
-        [ -f extracted/product.img ] && sudo mount -o loop,rw extracted/product.img mnt/product || true
-
-        set -e
-
-    # ─────────────────────────────
-    # PATCH ENGINE (CLEAN)
-    # ─────────────────────────────
-
-    - name: Apply patches
-      if: env.FORMAT == 'payload'
-      run: |
-        set +e
-
-        # Carrier config
-        if [ -d mnt/product ]; then
-          FILE="mnt/product/etc/CarrierSettings/megafon_volte.xml"
-          mkdir -p "$(dirname "$FILE")"
-
-          cat > "$FILE" << 'XML'
+        cat > "$ROOT/system/etc/CarrierSettings/ru_volte.xml" << 'XML'
 <?xml version="1.0" encoding="UTF-8"?>
 <carrier_config_list>
   <carrier_config>
     <mcc>250</mcc>
-    <mnc>02</mnc>
+
     <bool name="carrier_volte_available_bool">true</bool>
     <bool name="carrier_wfc_ims_available_bool">true</bool>
+    <bool name="enhanced_4g_lte_on_by_default_bool">true</bool>
+
+    <bool name="carrier_wfc_supports_wifi_only_bool">true</bool>
+    <int name="carrier_default_wfc_ims_mode_int">2</int>
+
+    <bool name="ims_service_enable_bool">true</bool>
   </carrier_config>
 </carrier_config_list>
 XML
-        fi
 
         # IMS permissions
-        if [ -d mnt/system ]; then
-          mkdir -p mnt/system/etc/default-permissions
+        mkdir -p "$ROOT/system/etc/default-permissions"
 
-          cat > mnt/system/etc/default-permissions/megafon_ims.xml << 'XML'
-<?xml version="1.0" encoding="utf-8"?>
+        cat > "$ROOT/system/etc/default-permissions/ims.xml" << 'XML'
 <exceptions>
   <exception package="com.android.phone">
     <permission name="android.permission.MODIFY_PHONE_STATE" fixed="true"/>
   </exception>
+
+  <exception package="com.android.ims">
+    <permission name="android.permission.READ_PHONE_STATE" fixed="true"/>
+  </exception>
 </exceptions>
 XML
-        fi
 
-        set -e
+        # props patch (safe)
+        for F in "$ROOT/system/build.prop" "$ROOT/vendor/build.prop"; do
+          [ -f "$F" ] || continue
+
+          sed -i '/persist.dbg.volte_avail_ovr/d' "$F" || true
+
+          cat >> "$F" << EOF
+persist.dbg.volte_avail_ovr=1
+persist.dbg.wfc_avail_ovr=1
+persist.data.iwlan.enable=true
+persist.ims.volte_enable=1
+EOF
+        done
+
+        echo "✅ patch applied"
 
     # ─────────────────────────────
-    # CLEANUP
+    # REPACK ZIP (ZIP ROM ONLY)
     # ─────────────────────────────
 
-    - name: Unmount
-      if: env.FORMAT == 'payload'
+    - name: Repack ZIP ROM
+      if: env.FORMAT == 'zip'
       run: |
-        sudo umount mnt/system || true
-        sudo umount mnt/product || true
+        cd rom
+        zip -r -0 ../rom_patched.zip .
+        cd ..
+        echo "📦 ZIP built"
 
     # ─────────────────────────────
-    # BUILD ARTIFACTS
+    # REPACK PAYLOAD (SAFE MODE)
     # ─────────────────────────────
 
-    - name: Build result
+    - name: Build payload output
       if: env.FORMAT == 'payload'
       run: |
         mkdir -p result
 
-        for f in system.img product.img vendor.img boot.img dtbo.img; do
+        for f in system.img product.img vendor.img boot.img; do
           [ -f "extracted/$f" ] && cp "extracted/$f" result/
         done
 
@@ -247,7 +174,7 @@ fastboot -w
 fastboot reboot
 EOF
 
-        ls -lh result
+        echo "📦 payload artifacts ready"
 
     # ─────────────────────────────
     # UPLOAD
@@ -257,12 +184,12 @@ EOF
       if: env.FORMAT == 'zip'
       uses: actions/upload-artifact@v4
       with:
-        name: evox-zip-${{ github.event.inputs.DEVICE }}
-        path: rom
+        name: rom-patched-${{ github.event.inputs.DEVICE }}
+        path: rom_patched.zip
 
     - name: Upload payload
       if: env.FORMAT == 'payload'
       uses: actions/upload-artifact@v4
       with:
-        name: evox-payload-${{ github.event.inputs.DEVICE }}
+        name: rom-patched-${{ github.event.inputs.DEVICE }}
         path: result

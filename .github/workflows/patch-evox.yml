@@ -163,35 +163,51 @@ jobs:
     - name: Checkout репозитория (для доступа к файлам патча)
       uses: actions/checkout@v4
 
-    - name: "[payload] Монтируем system.img и патчим"
+    - name: "[payload] Монтируем образы и патчим"
       if: env.FORMAT == 'payload'
       run: |
         set +e
+        e2fsck -f extracted/product.img
         e2fsck -f extracted/system.img
         set -e
+
+        # Увеличиваем оба образа
+        resize2fs extracted/product.img $(( $(du -m extracted/product.img | cut -f1) + 50 ))M
         resize2fs extracted/system.img $(( $(du -m extracted/system.img | cut -f1) + 50 ))M
 
-        sudo mount -o loop,rw extracted/system.img mnt/system || {
-          echo "❌ mount не удался"
+        # Монтируем product.img для CarrierSettings
+        mkdir -p mnt/product
+        sudo mount -o loop,rw extracted/product.img mnt/product || {
+          echo "❌ mount product не удался"
           exit 1
         }
-        df -h mnt/system
 
-        sudo mkdir -p mnt/system/product/etc/CarrierSettings || true
-        sudo mkdir -p mnt/system/etc/default-permissions || true
+        # Монтируем system.img для build.prop и permissions
+        mkdir -p mnt/system
+        sudo mount -o loop,rw extracted/system.img mnt/system || {
+          echo "❌ mount system не удался"
+          exit 1
+        }
 
+        df -h mnt/product mnt/system
+
+        # CarrierSettings — в product
+        sudo mkdir -p mnt/product/etc/CarrierSettings || true
         sudo cp .github/files/megafon_volte.xml \
-          mnt/system/product/etc/CarrierSettings/megafon_volte.xml
+          mnt/product/etc/CarrierSettings/megafon_volte.xml
+        echo "✅ megafon_volte.xml записан"
+
+        # IMS permissions — в system
+        sudo mkdir -p mnt/system/etc/default-permissions || true
         sudo cp .github/files/megafon_ims.xml \
           mnt/system/etc/default-permissions/megafon-ims.xml
+        echo "✅ megafon-ims.xml записан"
 
-        echo "✅ Файлы скопированы"
-
-        sudo find mnt/system -name "build.prop" 2>/dev/null
+        # build.prop — ищем во всех образах
+        sudo find mnt/system mnt/product -name "build.prop" 2>/dev/null
         for BUILDPROP in \
           "mnt/system/build.prop" \
-          "mnt/system/system/build.prop" \
-          "mnt/system/product/build.prop"; do
+          "mnt/product/build.prop"; do
           [ -f "$BUILDPROP" ] || continue
           sudo sed -i '/persist.dbg.volte_avail_ovr/d' "$BUILDPROP"
           sudo sed -i '/persist.dbg.wfc_avail_ovr/d' "$BUILDPROP"
@@ -200,6 +216,7 @@ jobs:
           echo "✅ build.prop обновлён: $BUILDPROP"
         done
 
+        sudo umount mnt/product
         sudo umount mnt/system
         echo "✅ Готово"
 
@@ -208,22 +225,30 @@ jobs:
       run: |
         mkdir -p result
         cp extracted/system.img result/
+        cp extracted/product.img result/
         cp extracted/boot.img result/ 2>/dev/null || true
         cp extracted/vendor.img result/ 2>/dev/null || true
         cp extracted/dtbo.img result/ 2>/dev/null || true
         cp extracted/vendor_boot.img result/ 2>/dev/null || true
+        cp extracted/vendor_kernel_boot.img result/ 2>/dev/null || true
+        cp extracted/init_boot.img result/ 2>/dev/null || true
 
         cat > result/FLASH_INSTRUCTIONS.txt << 'EOF'
         Инструкция по прошивке (fastboot):
 
         fastboot flash system system.img
+        fastboot flash product product.img
         fastboot flash boot boot.img
+        fastboot flash init_boot init_boot.img
         fastboot flash vendor vendor.img
         fastboot flash dtbo dtbo.img
         fastboot flash vendor_boot vendor_boot.img
+        fastboot flash vendor_kernel_boot vendor_kernel_boot.img
         fastboot -w
         fastboot reboot
         EOF
+
+        ls -lh result/
 
         ls -lh result/
 

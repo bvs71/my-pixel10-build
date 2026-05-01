@@ -151,8 +151,14 @@ jobs:
     - name: "[payload] Ищем где лежат образы"
       if: env.FORMAT == 'payload'
       run: |
+        echo "=== find system.img ==="
         find . -name "system.img" 2>/dev/null
+        echo "=== find product.img ==="
         find . -name "product.img" 2>/dev/null
+        echo "=== корень ==="
+        ls -lh .
+        echo "=== папки ==="
+        ls -lh */ 2>/dev/null || true
     - name: "[payload] Конвертируем system.img из sparse"
       if: env.FORMAT == 'payload'
       run: |

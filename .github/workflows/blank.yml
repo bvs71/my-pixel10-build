@@ -1,0 +1,69 @@
+name: Build ROM
+
+on:
+  workflow_dispatch:       # запуск вручную кнопкой
+    inputs:
+      ROM_NAME:
+        description: 'Прошивка (axion / crdroid / lunaris)'
+        required: true
+        default: 'axion'
+      DEVICE:
+        description: 'Кодовое имя устройства'
+        required: true
+        default: 'frankel'   # frankel=Pixel10, blazer=10Pro, mustang=10ProXL
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Освобождаем место на диске
+      run: |
+        sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/share/boost
+        sudo apt-get clean
+        df -h
+
+    - name: Устанавливаем зависимости
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y git-core gnupg flex bison build-essential \
+          zip curl zlib1g-dev libc6-dev-i386 libncurses5 \
+          lib32ncurses5-dev x11proto-core-dev libx11-dev lib32z1-dev \
+          libgl1-mesa-dev libxml2-utils xsltproc unzip fontconfig python3
+
+    - name: Устанавливаем repo
+      run: |
+        mkdir -p ~/.local/bin
+        curl https://storage.googleapis.com/git-repo-downloads/repo \
+          > ~/.local/bin/repo
+        chmod a+x ~/.local/bin/repo
+        echo "$HOME/.local/bin" >> $GITHUB_PATH
+
+    - name: Настраиваем git
+      run: |
+        git config --global user.email "build@github.com"
+        git config --global user.name "GitHub Actions"
+
+    - name: Инициализируем исходники (AxionAOSP)
+      if: ${{ github.event.inputs.ROM_NAME == 'axion' }}
+      run: |
+        mkdir rom && cd rom
+        repo init \
+          -u https://github.com/AxionAOSP/manifest \
+          -b android-16.0 \
+          --depth=1
+        repo sync -c -j4 --force-sync --no-clone-bundle --no-tags
+
+    - name: Собираем прошивку
+      run: |
+        cd rom
+        source build/envsetup.sh
+        lunch axion_${{ github.event.inputs.DEVICE }}-userdebug
+        m -j4
+
+    - name: Загружаем результат
+      uses: actions/upload-artifact@v4
+      with:
+        name: rom-${{ github.event.inputs.DEVICE }}
+        path: rom/out/target/product/${{ github.event.inputs.DEVICE }}/*.zip
+        retention-days: 3   # хранится 3 дня, потом удаляется

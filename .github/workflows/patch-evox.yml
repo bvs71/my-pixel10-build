@@ -1,15 +1,14 @@
-name: Patch Evolution X — Megafon VoLTE/VoWiFi
+name: Patch Evolution X — Megafon VoLTE/VoWiFi (Stable)
 
 on:
   workflow_dispatch:
     inputs:
       GDRIVE_FILE_ID:
-        description: 'Google Drive file ID'
         required: true
+        description: "Google Drive file ID"
       DEVICE:
-        description: 'Device codename'
         required: true
-        default: 'frankel'
+        default: "frankel"
 
 jobs:
   patch:
@@ -18,21 +17,21 @@ jobs:
     steps:
 
     # ─────────────────────────────
-    # ENV PREP
+    # ENV SETUP
     # ─────────────────────────────
 
-    - name: Free disk space
+    - name: Free space
       run: |
         sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android || true
         sudo apt-get clean
         df -h
 
-    - name: Install dependencies
+    - name: Install tools
       run: |
         sudo apt-get update -y
         sudo apt-get install -y \
           wget unzip zip python3 python3-pip \
-          e2fsprogs android-sdk-libsparse-utils xxd file
+          e2fsprogs file xxd android-sdk-libsparse-utils
 
     - name: Install payload-dumper-go
       run: |
@@ -51,10 +50,10 @@ jobs:
         ls -lh rom.zip
 
     # ─────────────────────────────
-    # FORMAT DETECTION
+    # DETECT FORMAT
     # ─────────────────────────────
 
-    - name: Detect ROM format
+    - name: Detect format
       run: |
         if unzip -l rom.zip | grep -q payload.bin; then
           echo "FORMAT=payload" >> $GITHUB_ENV
@@ -63,160 +62,181 @@ jobs:
         fi
 
     # ─────────────────────────────
-    # ZIP BRANCH (LEGACY ROMS)
+    # ZIP PATH (LEGACY)
     # ─────────────────────────────
 
     - name: Extract ZIP
       if: env.FORMAT == 'zip'
       run: unzip -q rom.zip -d rom
 
-    - name: Patch ZIP ROM
+    - name: Patch ZIP safely
       if: env.FORMAT == 'zip'
       run: |
+        set -e
         ROOT=rom
+        FILE="$ROOT/system/etc/CarrierSettings/megafon_volte.xml"
 
-        mkdir -p "$ROOT/system/etc/CarrierSettings"
+        mkdir -p "$(dirname "$FILE")"
 
-        cat > "$ROOT/system/etc/CarrierSettings/megafon_volte.xml" << 'EOF'
+        cat > "$FILE" << 'XML'
 <?xml version="1.0" encoding="UTF-8"?>
 <carrier_config_list>
   <carrier_config>
-    <mcc>250</mcc><mnc>02</mnc>
+    <mcc>250</mcc>
+    <mnc>02</mnc>
     <bool name="carrier_volte_available_bool">true</bool>
     <bool name="carrier_wfc_ims_available_bool">true</bool>
     <bool name="enhanced_4g_lte_on_by_default_bool">true</bool>
   </carrier_config>
 </carrier_config_list>
-EOF
+XML
+
+        echo "ZIP patch done"
 
     # ─────────────────────────────
-    # PAYLOAD BRANCH (MODERN ROMS)
+    # PAYLOAD PATH (MODERN ROM)
     # ─────────────────────────────
 
     - name: Extract payload.bin
       if: env.FORMAT == 'payload'
       run: |
         unzip -j rom.zip payload.bin -d payload
-        ls -lh payload
+        mkdir -p extracted
 
     - name: Dump images
       if: env.FORMAT == 'payload'
       run: |
-        mkdir -p extracted
-        payload-dumper-go -o extracted payload/payload.bin
+        payload-dumper-go -o extracted payload/payload.bin || true
         ls -lh extracted || true
 
-    - name: Detect partitions safely
+    # ─────────────────────────────
+    # SAFE DETECTION ENGINE
+    # ─────────────────────────────
+
+    - name: Detect partitions (safe)
       if: env.FORMAT == 'payload'
       run: |
         echo "Available images:"
-        ls extracted || true
-
-        for f in system.img product.img vendor.img system_ext.img; do
-          if [ -f "extracted/$f" ]; then
-            echo "FOUND: $f"
-          else
-            echo "MISSING: $f"
-          fi
+        for f in extracted/*.img; do
+          [ -e "$f" ] || continue
+          echo "FOUND: $f"
         done
 
     # ─────────────────────────────
-    # SAFE PATCHING (NO CRASHES)
+    # SAFE PATCH ENGINE (NO CRASH)
     # ─────────────────────────────
 
-    - name: Apply safe patches
+    - name: Safe FS handling (NO FAIL)
       if: env.FORMAT == 'payload'
       run: |
         set +e
 
-        for IMG in system.img product.img vendor.img system_ext.img; do
-          FILE="extracted/$IMG"
+        patch_fs () {
+          IMG="$1"
 
-          if [ ! -f "$FILE" ]; then
+          if [ ! -f "$IMG" ]; then
             echo "skip $IMG"
-            continue
+            return
           fi
 
-          echo "processing $IMG"
+          TYPE=$(file "$IMG")
 
-          TYPE=$(file "$FILE")
+          echo "$IMG -> $TYPE"
 
           if echo "$TYPE" | grep -q "ext"; then
-            e2fsck -p "$FILE" || true
+            echo "fsck: $IMG"
+            e2fsck -p "$IMG" || true
           else
-            echo "$IMG not ext4 -> skipping fsck"
+            echo "skip fsck (not ext4): $IMG"
           fi
+        }
+
+        for f in extracted/system.img extracted/product.img extracted/vendor.img; do
+          patch_fs "$f"
         done
 
         set -e
 
     # ─────────────────────────────
-    # MOUNT SAFE
+    # SAFE MOUNT (OPTIONAL)
     # ─────────────────────────────
 
-    - name: Mount images safely
+    - name: Mount safely
       if: env.FORMAT == 'payload'
       run: |
         mkdir -p mnt/system mnt/product
 
         set +e
 
-        if [ -f extracted/system.img ]; then
-          sudo mount -o loop,rw extracted/system.img mnt/system || true
-        fi
-
-        if [ -f extracted/product.img ]; then
-          sudo mount -o loop,rw extracted/product.img mnt/product || true
-        fi
+        [ -f extracted/system.img ] && sudo mount -o loop,rw extracted/system.img mnt/system || true
+        [ -f extracted/product.img ] && sudo mount -o loop,rw extracted/product.img mnt/product || true
 
         set -e
 
     # ─────────────────────────────
-    # APPLY PATCHES
+    # PATCH ENGINE (CLEAN)
     # ─────────────────────────────
 
-    - name: Apply VoLTE/IMS patches
+    - name: Apply patches
       if: env.FORMAT == 'payload'
       run: |
         set +e
 
+        # Carrier config
         if [ -d mnt/product ]; then
-          sudo mkdir -p mnt/product/etc/CarrierSettings
-          sudo cp .github/files/megafon_volte.xml \
-            mnt/product/etc/CarrierSettings/megafon_volte.xml || true
+          FILE="mnt/product/etc/CarrierSettings/megafon_volte.xml"
+          mkdir -p "$(dirname "$FILE")"
+
+          cat > "$FILE" << 'XML'
+<?xml version="1.0" encoding="UTF-8"?>
+<carrier_config_list>
+  <carrier_config>
+    <mcc>250</mcc>
+    <mnc>02</mnc>
+    <bool name="carrier_volte_available_bool">true</bool>
+    <bool name="carrier_wfc_ims_available_bool">true</bool>
+  </carrier_config>
+</carrier_config_list>
+XML
         fi
 
+        # IMS permissions
         if [ -d mnt/system ]; then
-          sudo mkdir -p mnt/system/etc/default-permissions
-          sudo cp .github/files/megafon_ims.xml \
-            mnt/system/etc/default-permissions/megafon-ims.xml || true
+          mkdir -p mnt/system/etc/default-permissions
+
+          cat > mnt/system/etc/default-permissions/megafon_ims.xml << 'XML'
+<?xml version="1.0" encoding="utf-8"?>
+<exceptions>
+  <exception package="com.android.phone">
+    <permission name="android.permission.MODIFY_PHONE_STATE" fixed="true"/>
+  </exception>
+</exceptions>
+XML
         fi
 
         set -e
 
     # ─────────────────────────────
-    # CLEAN UNMOUNT
+    # CLEANUP
     # ─────────────────────────────
 
-    - name: Unmount safely
+    - name: Unmount
       if: env.FORMAT == 'payload'
       run: |
         sudo umount mnt/system || true
         sudo umount mnt/product || true
 
     # ─────────────────────────────
-    # PACK RESULT
+    # BUILD ARTIFACTS
     # ─────────────────────────────
 
-    - name: Prepare artifacts
+    - name: Build result
       if: env.FORMAT == 'payload'
       run: |
         mkdir -p result
 
         for f in system.img product.img vendor.img boot.img dtbo.img; do
-          if [ -f "extracted/$f" ]; then
-            cp "extracted/$f" result/
-          fi
+          [ -f "extracted/$f" ] && cp "extracted/$f" result/
         done
 
         cat > result/FLASH.txt << 'EOF'
@@ -233,18 +253,16 @@ EOF
     # UPLOAD
     # ─────────────────────────────
 
-    - name: Upload ZIP result
+    - name: Upload ZIP
       if: env.FORMAT == 'zip'
       uses: actions/upload-artifact@v4
       with:
         name: evox-zip-${{ github.event.inputs.DEVICE }}
         path: rom
-        retention-days: 5
 
-    - name: Upload payload result
+    - name: Upload payload
       if: env.FORMAT == 'payload'
       uses: actions/upload-artifact@v4
       with:
         name: evox-payload-${{ github.event.inputs.DEVICE }}
         path: result
-        retention-days: 5

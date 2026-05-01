@@ -163,29 +163,22 @@ jobs:
     - name: "[payload] Монтируем system.img и патчим"
       if: env.FORMAT == 'payload'
       run: |
-        set +e   # не падаем на ошибках mkdir
-        mkdir -p mnt/system
-        set -e   # возвращаем строгий режим после mount
-        
-        e2fsck -f extracted/system.img || true
+        set +e
+        e2fsck -f extracted/system.img
+        set -e
         resize2fs extracted/system.img $(( $(du -m extracted/system.img | cut -f1) + 50 ))M
-        
+
         sudo mount -o loop,rw extracted/system.img mnt/system || {
           echo "❌ mount не удался"
           exit 1
         }
         df -h mnt/system
 
-        # Создаём папки
         sudo mkdir -p mnt/system/product/etc/CarrierSettings || true
         sudo mkdir -p mnt/system/etc/default-permissions || true
 
-        # Проверяем что папки созданы
-        ls -la mnt/system/product/etc/ | grep Carrier || echo "⚠️ CarrierSettings не создан"
-        ls -la mnt/system/etc/ | grep default || echo "⚠️ default-permissions не создан"
-
-        # Carrier config
-        sudo tee mnt/system/product/etc/CarrierSettings/megafon_volte.xml > /dev/null << 'EOF'
+        sudo tee mnt/system/product/etc/CarrierSettings/megafon_volte.xml > /dev/null \
+          <<'XMLEOF'
 <?xml version="1.0" encoding="UTF-8"?>
 <carrier_config_list>
   <carrier_config>
@@ -203,19 +196,18 @@ jobs:
     <bool name="carrier_wfc_ims_require_presub_bool">false</bool>
   </carrier_config>
 </carrier_config_list>
-EOF
+XMLEOF
 
-        # IMS permissions
-        sudo tee mnt/system/etc/default-permissions/megafon-ims.xml > /dev/null << 'EOF'
+        sudo tee mnt/system/etc/default-permissions/megafon-ims.xml > /dev/null \
+          <<'XMLEOF'
 <?xml version="1.0" encoding="utf-8"?>
 <exceptions>
   <exception package="com.android.phone">
     <permission name="android.permission.MODIFY_PHONE_STATE" fixed="true"/>
   </exception>
 </exceptions>
-EOF
+XMLEOF
 
-        # build.prop — ищем где лежит
         sudo find mnt/system -name "build.prop" 2>/dev/null
         for BUILDPROP in \
           "mnt/system/build.prop" \

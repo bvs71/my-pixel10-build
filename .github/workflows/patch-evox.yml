@@ -1,69 +1,292 @@
-name: Build ROM
+name: Patch Evolution X — Megafon VoLTE/VoWiFi
 
 on:
-  workflow_dispatch:       # запуск вручную кнопкой
+  workflow_dispatch:
     inputs:
-      ROM_NAME:
-        description: 'Прошивка (axion / crdroid / lunaris)'
+      EVOX_URL:
+        description: 'Прямая ссылка на ZIP Evolution X'
         required: true
-        default: 'axion'
       DEVICE:
-        description: 'Кодовое имя устройства'
+        description: 'Кодовое имя (frankel / blazer / mustang)'
         required: true
-        default: 'frankel'   # frankel=Pixel10, blazer=10Pro, mustang=10ProXL
+        default: 'frankel'
 
 jobs:
-  build:
+  patch:
     runs-on: ubuntu-latest
-    
+    # Нужен большой диск — payload.bin это несколько ГБ
+    # Стандартный runner даёт ~14 ГБ, этого впритык хватает
+
     steps:
+
     - name: Освобождаем место на диске
       run: |
-        sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/share/boost
+        sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/share/boost \
+          /usr/local/lib/android /usr/lib/jvm /usr/lib/firefox
         sudo apt-get clean
         df -h
 
     - name: Устанавливаем зависимости
       run: |
-        sudo apt-get update
-        sudo apt-get install -y git-core gnupg flex bison build-essential \
-          zip curl zlib1g-dev libc6-dev-i386 libncurses5 \
-          lib32ncurses5-dev x11proto-core-dev libx11-dev lib32z1-dev \
-          libgl1-mesa-dev libxml2-utils xsltproc unzip fontconfig python3
+        sudo apt-get update -q
+        sudo apt-get install -y \
+          openjdk-17-jdk python3 python3-pip \
+          wget unzip zip e2fsprogs \
+          android-sdk-libsparse-utils
 
-    - name: Устанавливаем repo
+    - name: Устанавливаем payload-dumper-go
       run: |
-        mkdir -p ~/.local/bin
-        curl https://storage.googleapis.com/git-repo-downloads/repo \
-          > ~/.local/bin/repo
-        chmod a+x ~/.local/bin/repo
-        echo "$HOME/.local/bin" >> $GITHUB_PATH
+        wget -q https://github.com/ssut/payload-dumper-go/releases/download/1.2.2/payload-dumper-go_1.2.2_linux_amd64.tar.gz
+        tar xf payload-dumper-go_1.2.2_linux_amd64.tar.gz
+        sudo mv payload-dumper-go /usr/local/bin/
+        payload-dumper-go --version
 
-    - name: Настраиваем git
+    - name: Устанавливаем img2simg / simg2img
       run: |
-        git config --global user.email "build@github.com"
-        git config --global user.name "GitHub Actions"
+        # Уже есть в android-sdk-libsparse-utils
+        which simg2img && echo "✅ simg2img найден"
+        which img2simg && echo "✅ img2simg найден"
 
-    - name: Инициализируем исходники (AxionAOSP)
-      if: ${{ github.event.inputs.ROM_NAME == 'axion' }}
+    - name: Скачиваем Evolution X
       run: |
-        mkdir rom && cd rom
-        repo init \
-          -u https://github.com/AxionAOSP/manifest \
-          -b android-16.0 \
-          --depth=1
-        repo sync -c -j4 --force-sync --no-clone-bundle --no-tags
+        echo "⬇️ Скачиваем прошивку..."
+        wget -q --show-progress -O evox.zip "${{ github.event.inputs.EVOX_URL }}"
+        ls -lh evox.zip
 
-    - name: Собираем прошивку
+    - name: Определяем формат
       run: |
-        cd rom
-        source build/envsetup.sh
-        lunch axion_${{ github.event.inputs.DEVICE }}-userdebug
-        m -j4
+        unzip -l evox.zip | grep -q "payload.bin" \
+          && echo "FORMAT=payload" >> $GITHUB_ENV \
+          || echo "FORMAT=zip" >> $GITHUB_ENV
+        cat $GITHUB_ENV
 
-    - name: Загружаем результат
+    # ─────────────────────────────────────────
+    # ВЕТКА A: обычный ZIP
+    # ─────────────────────────────────────────
+
+    - name: "[ZIP] Распаковываем"
+      if: env.FORMAT == 'zip'
+      run: unzip -q evox.zip -d evox
+
+    - name: "[ZIP] Патчим"
+      if: env.FORMAT == 'zip'
+      run: |
+        bash -c '
+          set -e
+          ROOT=evox
+
+          # --- carrier config ---
+          mkdir -p "$ROOT/system/etc/CarrierSettings"
+          cat > "$ROOT/system/etc/CarrierSettings/megafon_volte.xml" << EOF
+        <?xml version="1.0" encoding="UTF-8"?>
+        <carrier_config_list>
+          <carrier_config>
+            <mcc>250</mcc><mnc>02</mnc>
+            <bool name="carrier_volte_available_bool">true</bool>
+            <bool name="carrier_volte_provisioning_required_bool">false</bool>
+            <bool name="carrier_volte_tty_supported_bool">true</bool>
+            <bool name="enhanced_4g_lte_on_by_default_bool">true</bool>
+            <bool name="carrier_allow_turnoff_ims_bool">false</bool>
+            <bool name="carrier_wfc_ims_available_bool">true</bool>
+            <bool name="carrier_wfc_supports_wifi_only_bool">true</bool>
+            <int name="carrier_default_wfc_ims_mode_int">2</int>
+            <bool name="carrier_wfc_ims_enabled_bool">true</bool>
+            <bool name="carrier_volte_provisioned_bool">true</bool>
+            <bool name="carrier_wfc_ims_require_presub_bool">false</bool>
+          </carrier_config>
+        </carrier_config_list>
+        EOF
+
+          # --- IMS permissions ---
+          mkdir -p "$ROOT/system/etc/default-permissions"
+          cat > "$ROOT/system/etc/default-permissions/megafon-ims.xml" << EOF
+        <?xml version="1.0" encoding="utf-8"?>
+        <exceptions>
+          <exception package="com.android.phone">
+            <permission name="android.permission.MODIFY_PHONE_STATE" fixed="true"/>
+          </exception>
+        </exceptions>
+        EOF
+
+          # --- build.prop ---
+          for PROP in \
+            "persist.dbg.volte_avail_ovr=1" \
+            "persist.dbg.wfc_avail_ovr=1"; do
+            KEY="${PROP%%=*}"
+            for F in \
+              "$ROOT/system/build.prop" \
+              "$ROOT/vendor/build.prop"; do
+              [ -f "$F" ] || continue
+              sed -i "/$KEY/d" "$F"
+              echo "$PROP" >> "$F"
+              echo "✅ $PROP → $F"
+            done
+          done
+        '
+
+    # ─────────────────────────────────────────
+    # ВЕТКА B: payload.bin
+    # ─────────────────────────────────────────
+
+    - name: "[payload] Извлекаем payload.bin"
+      if: env.FORMAT == 'payload'
+      run: |
+        echo "📦 Извлекаем payload.bin из ZIP..."
+        unzip -j evox.zip payload.bin -d payload_dir
+        ls -lh payload_dir/
+
+    - name: "[payload] Распаковываем образы"
+      if: env.FORMAT == 'payload'
+      run: |
+        mkdir extracted
+        payload-dumper-go -o extracted payload_dir/payload.bin
+        ls -lh extracted/
+
+    - name: "[payload] Конвертируем system.img из sparse"
+      if: env.FORMAT == 'payload'
+      run: |
+        cd extracted
+        # payload-dumper-go уже даёт raw образы, но на всякий случай
+        file system.img
+        # Если sparse — конвертируем в raw
+        if file system.img | grep -q "Android sparse"; then
+          simg2img system.img system_raw.img
+          mv system_raw.img system.img
+        fi
+        echo "✅ system.img готов: $(ls -lh system.img)"
+
+    - name: "[payload] Монтируем system.img и патчим"
+      if: env.FORMAT == 'payload'
+      run: |
+        mkdir -p mnt/system
+        # Монтируем read-write
+        sudo mount -o loop,rw extracted/system.img mnt/system || {
+          # Если не получилось rw — попробуем через debugfs
+          echo "⚠️ mount -rw не удался, пробуем resize + remount"
+          e2fsck -f extracted/system.img || true
+          resize2fs extracted/system.img
+          sudo mount -o loop,rw extracted/system.img mnt/system
+        }
+        df -h mnt/system
+
+        # --- carrier config ---
+        sudo mkdir -p mnt/system/etc/CarrierSettings
+        sudo tee mnt/system/etc/CarrierSettings/megafon_volte.xml << 'EOF'
+        <?xml version="1.0" encoding="UTF-8"?>
+        <carrier_config_list>
+          <carrier_config>
+            <mcc>250</mcc><mnc>02</mnc>
+            <bool name="carrier_volte_available_bool">true</bool>
+            <bool name="carrier_volte_provisioning_required_bool">false</bool>
+            <bool name="carrier_volte_tty_supported_bool">true</bool>
+            <bool name="enhanced_4g_lte_on_by_default_bool">true</bool>
+            <bool name="carrier_allow_turnoff_ims_bool">false</bool>
+            <bool name="carrier_wfc_ims_available_bool">true</bool>
+            <bool name="carrier_wfc_supports_wifi_only_bool">true</bool>
+            <int name="carrier_default_wfc_ims_mode_int">2</int>
+            <bool name="carrier_wfc_ims_enabled_bool">true</bool>
+            <bool name="carrier_volte_provisioned_bool">true</bool>
+            <bool name="carrier_wfc_ims_require_presub_bool">false</bool>
+          </carrier_config>
+        </carrier_config_list>
+        EOF
+
+        # --- IMS permissions ---
+        sudo mkdir -p mnt/system/etc/default-permissions
+        sudo tee mnt/system/etc/default-permissions/megafon-ims.xml << 'EOF'
+        <?xml version="1.0" encoding="utf-8"?>
+        <exceptions>
+          <exception package="com.android.phone">
+            <permission name="android.permission.MODIFY_PHONE_STATE" fixed="true"/>
+          </exception>
+        </exceptions>
+        EOF
+
+        # --- build.prop ---
+        BUILDPROP="mnt/system/build.prop"
+        if [ -f "$BUILDPROP" ]; then
+          sudo sed -i '/persist.dbg.volte_avail_ovr/d' "$BUILDPROP"
+          sudo sed -i '/persist.dbg.wfc_avail_ovr/d' "$BUILDPROP"
+          printf 'persist.dbg.volte_avail_ovr=1\npersist.dbg.wfc_avail_ovr=1\n' \
+            | sudo tee -a "$BUILDPROP"
+          echo "✅ build.prop обновлён"
+        fi
+
+        sudo umount mnt/system
+        echo "✅ Образ размонтирован"
+
+    - name: "[payload] Конвертируем обратно в sparse (опционально)"
+      if: env.FORMAT == 'payload'
+      run: |
+        cd extracted
+        # Pixel прошивается raw-образами через fastboot, sparse не обязателен
+        echo "system.img готов: $(ls -lh system.img)"
+
+    - name: "[payload] Собираем финальный архив"
+      if: env.FORMAT == 'payload'
+      run: |
+        # Для payload-прошивок пересборка payload.bin очень сложна.
+        # Вместо этого кладём образы рядом с инструкцией по прошивке.
+        mkdir -p result
+        cp extracted/system.img result/
+        # Копируем остальные образы как есть (boot, vendor и т.д.)
+        cp extracted/boot.img result/ 2>/dev/null || true
+        cp extracted/vendor.img result/ 2>/dev/null || true
+        cp extracted/dtbo.img result/ 2>/dev/null || true
+        cp extracted/vendor_boot.img result/ 2>/dev/null || true
+
+        cat > result/FLASH_INSTRUCTIONS.txt << 'EOF'
+        Инструкция по прошивке (fastboot):
+        
+        fastboot flash system system.img
+        fastboot flash boot boot.img
+        fastboot flash vendor vendor.img
+        fastboot flash dtbo dtbo.img
+        fastboot flash vendor_boot vendor_boot.img
+        fastboot -w          # wipe userdata
+        fastboot reboot
+        EOF
+
+        ls -lh result/
+
+    # ─────────────────────────────────────────
+    # Подпись и упаковка (только для ZIP-формата)
+    # ─────────────────────────────────────────
+
+    - name: "[ZIP] Скачиваем signapk и ключи"
+      if: env.FORMAT == 'zip'
+      run: |
+        wget -q https://github.com/LineageOS/android_build/raw/lineage-21/tools/signapk/SignApk.jar \
+          -O signapk.jar
+        wget -q https://github.com/LineageOS/android_build/raw/lineage-21/target/product/security/testkey.pk8 \
+          -O testkey.pk8
+        wget -q https://github.com/LineageOS/android_build/raw/lineage-21/target/product/security/testkey.x509.pem \
+          -O testkey.x509.pem
+
+    - name: "[ZIP] Перепаковываем и подписываем"
+      if: env.FORMAT == 'zip'
+      run: |
+        cd evox && zip -r -0 ../evox_patched_unsigned.zip . && cd ..
+        java -jar signapk.jar testkey.x509.pem testkey.pk8 \
+          evox_patched_unsigned.zip evox_patched_signed.zip
+        echo "✅ evox_patched_signed.zip готов"
+
+    # ─────────────────────────────────────────
+    # Загрузка результата
+    # ─────────────────────────────────────────
+
+    - name: Загружаем ZIP (если zip-формат)
+      if: env.FORMAT == 'zip'
       uses: actions/upload-artifact@v4
       with:
-        name: rom-${{ github.event.inputs.DEVICE }}
-        path: rom/out/target/product/${{ github.event.inputs.DEVICE }}/*.zip
-        retention-days: 3   # хранится 3 дня, потом удаляется
+        name: EvolutionX-Megafon-VoLTE-${{ github.event.inputs.DEVICE }}
+        path: evox_patched_signed.zip
+        retention-days: 5
+
+    - name: Загружаем образы (если payload-формат)
+      if: env.FORMAT == 'payload'
+      uses: actions/upload-artifact@v4
+      with:
+        name: EvolutionX-Megafon-VoLTE-imgs-${{ github.event.inputs.DEVICE }}
+        path: result/
+        retention-days: 5

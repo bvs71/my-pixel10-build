@@ -3,6 +3,9 @@ name: Patch Evolution X — Megafon VoLTE/VoWiFi
 on:
   workflow_dispatch:
     inputs:
+      GDRIVE_FILE_ID:
+        description: 'ID файла с Google Drive (часть ссылки между /d/ и /view)'
+        required: true
       DEVICE:
         description: 'Кодовое имя (frankel / blazer / mustang)'
         required: true
@@ -44,24 +47,24 @@ jobs:
         which simg2img && echo "✅ simg2img найден"
         which img2simg && echo "✅ img2simg найден"
 
-    - name: Скачиваем Evolution X из Releases
+    - name: Скачиваем Evolution X с Google Drive
       run: |
-        # Берём последний релиз из этого же репозитория
-        REPO="${{ github.repository }}"
-        ASSET_URL=$(curl -s \
-          "https://api.github.com/repos/$REPO/releases/latest" \
-          | python3 -c "
-        import sys, json
-        data = json.load(sys.stdin)
-        assets = data.get('assets', [])
-        for a in assets:
-            if a['name'].endswith('.zip'):
-                print(a['browser_download_url'])
-                break
-        ")
-        echo "URL: $ASSET_URL"
-        wget -q --show-progress -O evox.zip "$ASSET_URL"
+        FILE_ID="${{ github.event.inputs.GDRIVE_FILE_ID }}"
+        
+        # Устанавливаем gdown — надёжный инструмент для Google Drive
+        pip3 install -q gdown
+        
+        echo "⬇️ Скачиваем с Google Drive (ID: $FILE_ID)..."
+        gdown "https://drive.google.com/uc?id=$FILE_ID" -O evox.zip
+        
         ls -lh evox.zip
+        # Проверяем что скачался ZIP а не страница с капчей
+        file evox.zip | grep -q "Zip" || {
+          echo "❌ Скачался не ZIP — возможно сработала капча Google"
+          cat evox.zip | head -5
+          exit 1
+        }
+        echo "✅ Файл скачан успешно"
 
     - name: Определяем формат
       run: |

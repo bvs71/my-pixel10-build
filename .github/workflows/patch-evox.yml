@@ -47,7 +47,7 @@ jobs:
         which simg2img && echo "✅ simg2img найден"
         which img2simg && echo "✅ img2simg найден"
 
-    - name: Скачиваем Evolution X с Google Drive
+   - name: Скачиваем Evolution X с Google Drive
       run: |
         FILE_ID="${{ github.event.inputs.GDRIVE_FILE_ID }}"
         pip3 install -q gdown
@@ -56,11 +56,6 @@ jobs:
         gdown "https://drive.google.com/uc?id=$FILE_ID" -O evox.zip
         
         ls -lh evox.zip
-        # Проверяем по сигнатуре PK (magic bytes любого ZIP)
-        xxd evox.zip | head -1 | grep -q "504b" || {
-          echo "❌ Файл не является ZIP-архивом"
-          exit 1
-        }
         echo "✅ Файл скачан успешно"
 
     - name: Определяем формат

@@ -1,9 +1,9 @@
-name: ROM Builder (Stable)
+name: One Click ROM Builder
 
 on:
   workflow_dispatch:
     inputs:
-      GDRIVE_FILE_ID:
+      ROM_URL:
         required: true
 
 jobs:
@@ -15,20 +15,33 @@ jobs:
     - name: Checkout
       uses: actions/checkout@v4
 
-    - name: Setup Python
+    - name: Setup tools
       run: |
         sudo apt-get update -y
-        sudo apt-get install -y python3 python3-pip
-        pip3 install gdown
+        sudo apt-get install -y python3 unzip zip
 
     - name: Download ROM
       run: |
-        gdown "https://drive.google.com/uc?id=${{ github.event.inputs.GDRIVE_FILE_ID }}" -O rom.zip
+        echo "Downloading ROM..."
+        curl -L "${{ github.event.inputs.ROM_URL }}" -o rom.zip
 
     - name: Extract ROM
       run: |
+        mkdir rom
         unzip -q rom.zip -d rom
 
-    - name: Run Patch Engine
+    - name: Apply VoLTE/VoWiFi patch
       run: |
         python3 engine.py rom
+
+    - name: Repack ROM
+      run: |
+        cd rom
+        zip -r ../ROM-Patched.zip .
+        cd ..
+
+    - name: Upload ROM
+      uses: actions/upload-artifact@v4
+      with:
+        name: ROM-VoLTE-PATCHED
+        path: ROM-Patched.zip

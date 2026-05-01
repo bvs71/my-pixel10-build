@@ -1,0 +1,154 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+echo "📡 Starting VoLTE/VoWiFi patch (image mode)"
+
+WORKDIR="work"
+MNT="$WORKDIR/mnt"
+
+SYSTEM_IMG="system.img"
+PRODUCT_IMG="product.img"
+VENDOR_IMG="vendor.img"
+
+mkdir -p "$MNT/system" "$MNT/product" "$MNT/vendor"
+
+# ─────────────────────────────
+# SAFE MOUNT FUNCTION
+# ─────────────────────────────
+
+mount_img () {
+  IMG="$1"
+  MNT_POINT="$2"
+
+  if [ ! -f "$IMG" ]; then
+    echo "⚠️ skip missing $IMG"
+    return 0
+  fi
+
+  echo "📦 mounting $IMG -> $MNT_POINT"
+  sudo mount -o loop,rw "$IMG" "$MNT_POINT" || {
+    echo "❌ mount failed: $IMG"
+    return 0
+  }
+}
+
+# ─────────────────────────────
+# MOUNT IMAGES
+# ─────────────────────────────
+
+mount_img "$SYSTEM_IMG" "$MNT/system"
+mount_img "$PRODUCT_IMG" "$MNT/product"
+mount_img "$VENDOR_IMG" "$MNT/vendor"
+
+# ─────────────────────────────
+# PATCH FUNCTION
+# ─────────────────────────────
+
+patch_carrier() {
+  TARGET="$1"
+
+  mkdir -p "$TARGET/etc/CarrierSettings"
+
+  cat > "$TARGET/etc/CarrierSettings/ru_volte.xml" << 'XML'
+<?xml version="1.0" encoding="UTF-8"?>
+<carrier_config_list>
+  <carrier_config>
+    <mcc>250</mcc>
+
+    <bool name="carrier_volte_available_bool">true</bool>
+    <bool name="carrier_volte_provisioning_required_bool">false</bool>
+    <bool name="enhanced_4g_lte_on_by_default_bool">true</bool>
+
+    <bool name="carrier_wfc_ims_available_bool">true</bool>
+    <bool name="carrier_wfc_supports_wifi_only_bool">true</bool>
+    <bool name="carrier_wfc_supports_wifi_preferred_bool">true</bool>
+
+    <int name="carrier_default_wfc_ims_mode_int">2</int>
+
+    <bool name="ims_service_enable_bool">true</bool>
+  </carrier_config>
+</carrier_config_list>
+XML
+
+  echo "✅ carrier config patched in $TARGET"
+}
+
+patch_ims_permissions() {
+  TARGET="$1"
+
+  mkdir -p "$TARGET/etc/default-permissions"
+
+  cat > "$TARGET/etc/default-permissions/ims.xml" << 'XML'
+<exceptions>
+  <exception package="com.android.phone">
+    <permission name="android.permission.MODIFY_PHONE_STATE" fixed="true"/>
+  </exception>
+
+  <exception package="com.android.ims">
+    <permission name="android.permission.READ_PHONE_STATE" fixed="true"/>
+  </exception>
+</exceptions>
+XML
+
+  echo "✅ IMS permissions patched in $TARGET"
+}
+
+patch_props() {
+  FILE="$1"
+
+  [ ! -f "$FILE" ] && return 0
+
+  echo "🛠 patching props: $FILE"
+
+  for KEY in \
+    persist.dbg.volte_avail_ovr \
+    persist.dbg.vt_avail_ovr \
+    persist.dbg.wfc_avail_ovr \
+    persist.data.iwlan.enable \
+    persist.ims.volte_enable; do
+
+    sed -i "/${KEY}/d" "$FILE" || true
+  done
+
+  cat >> "$FILE" << EOF
+
+persist.dbg.volte_avail_ovr=1
+persist.dbg.vt_avail_ovr=1
+persist.dbg.wfc_avail_ovr=1
+persist.data.iwlan.enable=true
+persist.ims.volte_enable=1
+EOF
+}
+
+# ─────────────────────────────
+# APPLY PATCHES
+# ─────────────────────────────
+
+if [ -d "$MNT/system" ]; then
+  patch_carrier "$MNT/system"
+  patch_ims_permissions "$MNT/system"
+fi
+
+if [ -d "$MNT/product" ]; then
+  patch_carrier "$MNT/product"
+fi
+
+if [ -d "$MNT/vendor" ]; then
+  patch_props "$MNT/vendor/build.prop"
+fi
+
+if [ -d "$MNT/system" ]; then
+  patch_props "$MNT/system/build.prop"
+fi
+
+# ─────────────────────────────
+# CLEAN UNMOUNT
+# ─────────────────────────────
+
+echo "📤 unmounting..."
+
+sudo umount "$MNT/system" 2>/dev/null || true
+sudo umount "$MNT/product" 2>/dev/null || true
+sudo umount "$MNT/vendor" 2>/dev/null || true
+
+echo "✅ DONE: VoLTE/VoWiFi patch applied"

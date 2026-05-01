@@ -176,10 +176,10 @@ jobs:
         }
         df -h mnt/system
 
-        sudo mkdir -p mnt/system/etc/CarrierSettings
-        sudo mkdir -p mnt/system/etc/default-permissions
+        sudo mkdir -p mnt/system/product/etc/CarrierSettings || true
+        sudo mkdir -p mnt/system/etc/default-permissions || true
 
-        sudo tee mnt/system/etc/CarrierSettings/megafon_volte.xml > /dev/null << 'EOF'
+        sudo tee mnt/system/product/etc/CarrierSettings/megafon_volte.xml > /dev/null << 'EOF'
         <?xml version="1.0" encoding="UTF-8"?>
         <carrier_config_list>
           <carrier_config>
@@ -218,7 +218,7 @@ jobs:
         else
           echo "⚠️ build.prop не найден по пути $BUILDPROP"
           # Ищем где он реально лежит
-          sudo find mnt/system -name "build.prop" 2>/dev/null
+         sudo find mnt/system -name "build.prop" 2>/dev/null
         fi
 
         sudo umount mnt/system

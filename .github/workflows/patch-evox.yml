@@ -1,97 +1,32 @@
-name: Evolution X VoLTE/VoWiFi RU Builder (Stable)
+- name: Apply VoLTE/VoWiFi patch
+  run: |
+    set -e
 
-on:
-  workflow_dispatch:
-    inputs:
-      GDRIVE_FILE_ID:
-        required: true
-      DEVICE:
-        required: true
-        default: "device"
-
-jobs:
-  build:
-    runs-on: ubuntu-latest
-
-    steps:
+    echo "FORMAT=${{ env.FORMAT }}"
 
     # ─────────────────────────────
-    # SETUP
+    # FIX 1: SAFE ROOT SELECTION
     # ─────────────────────────────
 
-    - name: Free space
-      run: |
-        sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android || true
-        sudo apt-get clean
-        df -h
+    ROOT="rom"
+    if [ "${{ env.FORMAT }}" = "payload" ]; then
+      ROOT="extracted"
+    fi
 
-    - name: Install tools
-      run: |
-        sudo apt-get update -y
-        sudo apt-get install -y wget unzip zip python3 python3-pip file xxd
-
-    - name: Install payload-dumper-go
-      run: |
-        wget -q https://github.com/ssut/payload-dumper-go/releases/download/1.2.2/payload-dumper-go_1.2.2_linux_amd64.tar.gz
-        tar xf payload-dumper-go_1.2.2_linux_amd64.tar.gz
-        sudo mv payload-dumper-go /usr/local/bin/
+    echo "📁 ROOT=$ROOT"
 
     # ─────────────────────────────
-    # DOWNLOAD ROM
+    # FIX 2: SAFE DIRS (NO FAIL)
     # ─────────────────────────────
 
-    - name: Download ROM
-      run: |
-        pip3 install -q gdown
-        gdown "https://drive.google.com/uc?id=${{ github.event.inputs.GDRIVE_FILE_ID }}" -O rom.zip
+    mkdir -p "$ROOT/system/etc/CarrierSettings"
+    mkdir -p "$ROOT/system/etc/default-permissions"
 
     # ─────────────────────────────
-    # DETECT FORMAT
+    # FIX 3: NO HEREDOC (YAML SAFE)
     # ─────────────────────────────
 
-    - name: Detect ROM format
-      run: |
-        if unzip -l rom.zip | grep -q payload.bin; then
-          echo "FORMAT=payload" >> $GITHUB_ENV
-        else
-          echo "FORMAT=zip" >> $GITHUB_ENV
-        fi
-
-    # ─────────────────────────────
-    # EXTRACT
-    # ─────────────────────────────
-
-    - name: Extract ZIP ROM
-      if: env.FORMAT == 'zip'
-      run: unzip -q rom.zip -d rom
-
-    - name: Extract payload ROM
-      if: env.FORMAT == 'payload'
-      run: |
-        unzip -j rom.zip payload.bin -d payload
-        mkdir -p extracted
-        payload-dumper-go -o extracted payload/payload.bin
-
-    # ─────────────────────────────
-    # PATCH ENGINE (NO HEREDOC)
-    # ─────────────────────────────
-
-    - name: Apply VoLTE/VoWiFi patch
-      run: |
-        set -e
-
-        if [ "${{ env.FORMAT }}" = "payload" ]; then
-          ROOT=extracted
-        else
-          ROOT=rom
-        fi
-
-        echo "📡 Using ROOT=$ROOT"
-
-        # Carrier config
-        mkdir -p "$ROOT/system/etc/CarrierSettings"
-
-        printf '%s\n' \
+    printf '%s\n' \
 '<?xml version="1.0" encoding="UTF-8"?>' \
 '<carrier_config_list>' \
 '  <carrier_config>' \
@@ -105,10 +40,11 @@ jobs:
 '</carrier_config_list>' \
 > "$ROOT/system/etc/CarrierSettings/ru_volte.xml"
 
-        # IMS permissions
-        mkdir -p "$ROOT/system/etc/default-permissions"
+    # ─────────────────────────────
+    # FIX 4: IMS PERMISSIONS (SAFE PRINTF)
+    # ─────────────────────────────
 
-        printf '%s\n' \
+    printf '%s\n' \
 '<exceptions>' \
 '  <exception package="com.android.phone">' \
 '    <permission name="android.permission.MODIFY_PHONE_STATE" fixed="true"/>' \
@@ -119,66 +55,26 @@ jobs:
 '</exceptions>' \
 > "$ROOT/system/etc/default-permissions/ims.xml"
 
-        # Props patch (safe)
-        for F in "$ROOT/system/build.prop" "$ROOT/vendor/build.prop"; do
-          [ -f "$F" ] || continue
+    # ─────────────────────────────
+    # FIX 5: SAFE PROPS PATCH (NO DUPLICATES)
+    # ─────────────────────────────
 
-          sed -i '/persist.dbg.volte_avail_ovr/d' "$F" || true
-          sed -i '/persist.dbg.wfc_avail_ovr/d' "$F" || true
+    for F in "$ROOT/system/build.prop" "$ROOT/vendor/build.prop"; do
+      [ -f "$F" ] || continue
 
-          cat >> "$F" << EOF
+      echo "🛠 patching $F"
+
+      sed -i '/persist.dbg.volte_avail_ovr/d' "$F" || true
+      sed -i '/persist.dbg.wfc_avail_ovr/d' "$F" || true
+      sed -i '/persist.data.iwlan.enable/d' "$F" || true
+
+      cat >> "$F" << EOF
 
 persist.dbg.volte_avail_ovr=1
 persist.dbg.wfc_avail_ovr=1
 persist.data.iwlan.enable=true
 persist.ims.volte_enable=1
 EOF
-        done
+    done
 
-        echo "✅ Patch applied"
-
-    # ─────────────────────────────
-    # REPACK
-    # ─────────────────────────────
-
-    - name: Repack ZIP ROM
-      if: env.FORMAT == 'zip'
-      run: |
-        cd rom
-        zip -r -0 ../rom_patched.zip .
-        cd ..
-
-    - name: Prepare payload output
-      if: env.FORMAT == 'payload'
-      run: |
-        mkdir -p result
-
-        for f in system.img product.img vendor.img boot.img; do
-          [ -f "extracted/$f" ] && cp "extracted/$f" result/
-        done
-
-        cat > result/FLASH.txt << 'EOF'
-fastboot flash system system.img
-fastboot flash product product.img
-fastboot flash vendor vendor.img
-fastboot -w
-fastboot reboot
-EOF
-
-    # ─────────────────────────────
-    # UPLOAD
-    # ─────────────────────────────
-
-    - name: Upload ZIP
-      if: env.FORMAT == 'zip'
-      uses: actions/upload-artifact@v4
-      with:
-        name: evox-patched-${{ github.event.inputs.DEVICE }}
-        path: rom_patched.zip
-
-    - name: Upload payload
-      if: env.FORMAT == 'payload'
-      uses: actions/upload-artifact@v4
-      with:
-        name: evox-patched-${{ github.event.inputs.DEVICE }}
-        path: result
+    echo "✅ PATCH COMPLETE"

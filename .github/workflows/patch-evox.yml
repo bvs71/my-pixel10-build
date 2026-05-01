@@ -164,16 +164,22 @@ jobs:
       if: env.FORMAT == 'payload'
       run: |
         mkdir -p mnt/system
+        
+        # Увеличиваем образ на 50MB чтобы было место для наших файлов
+        e2fsck -f extracted/system.img || true
+        resize2fs extracted/system.img $(( $(du -m extracted/system.img | cut -f1) + 50 ))M
+        
         sudo mount -o loop,rw extracted/system.img mnt/system || {
-          echo "⚠️ mount -rw не удался, пробуем resize..."
-          e2fsck -f extracted/system.img || true
-          resize2fs extracted/system.img
-          sudo mount -o loop,rw extracted/system.img mnt/system
+          echo "❌ mount не удался"
+          exit 1
         }
         df -h mnt/system
 
+        # mkdir только если папок ещё нет
         sudo mkdir -p mnt/system/etc/CarrierSettings
-        sudo tee mnt/system/etc/CarrierSettings/megafon_volte.xml << 'EOF'
+        sudo mkdir -p mnt/system/etc/default-permissions
+
+        sudo tee mnt/system/etc/CarrierSettings/megafon_volte.xml > /dev/null << 'EOF'
         <?xml version="1.0" encoding="UTF-8"?>
         <carrier_config_list>
           <carrier_config>
@@ -193,8 +199,7 @@ jobs:
         </carrier_config_list>
         EOF
 
-        sudo mkdir -p mnt/system/etc/default-permissions
-        sudo tee mnt/system/etc/default-permissions/megafon-ims.xml << 'EOF'
+        sudo tee mnt/system/etc/default-permissions/megafon-ims.xml > /dev/null << 'EOF'
         <?xml version="1.0" encoding="utf-8"?>
         <exceptions>
           <exception package="com.android.phone">
@@ -208,12 +213,16 @@ jobs:
           sudo sed -i '/persist.dbg.volte_avail_ovr/d' "$BUILDPROP"
           sudo sed -i '/persist.dbg.wfc_avail_ovr/d' "$BUILDPROP"
           printf 'persist.dbg.volte_avail_ovr=1\npersist.dbg.wfc_avail_ovr=1\n' \
-            | sudo tee -a "$BUILDPROP"
+            | sudo tee -a "$BUILDPROP" > /dev/null
           echo "✅ build.prop обновлён"
+        else
+          echo "⚠️ build.prop не найден по пути $BUILDPROP"
+          # Ищем где он реально лежит
+          sudo find mnt/system -name "build.prop" 2>/dev/null
         fi
 
         sudo umount mnt/system
-        echo "✅ Образ размонтирован"
+        echo "✅ Готово"
 
     - name: "[payload] Собираем финальный архив"
       if: env.FORMAT == 'payload'

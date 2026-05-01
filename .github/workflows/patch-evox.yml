@@ -25,22 +25,54 @@ jobs:
       run: |
         gdown "https://drive.google.com/uc?id=${{ github.event.inputs.GDRIVE_FILE_ID }}" -O rom.zip
 
-    - name: Extract ROM
+    - name: Extract payload.bin
       run: |
-        unzip -q rom.zip -d rom
+        mkdir payload
+        unzip -j rom.zip payload.bin -d payload
 
-    - name: Run Patch Engine
+    - name: Dump images
       run: |
-        python3 engine.py rom
-        
-    - name: Repack ROM
-      run: |
-        cd rom
-        zip -r ../ROM-PATCHED.zip .
-        cd ..
+        mkdir extracted
+        payload-dumper-go -o extracted payload/payload.bin
+        ls -lh extracted/
 
-    - name: Upload ROM artifact
-      uses: actions/upload-artifact@v4
-      with:
-        name: EvolutionX-VoLTE-Patched
-        path: ROM-PATCHED.zip
+    - name: Convert sparse images
+      run: |
+        cd extracted
+        for img in *.img; do
+          if file "$img" | grep -q "sparse"; then
+            simg2img "$img" "raw_$img"
+            mv "raw_$img" "$img"
+          fi
+        done
+
+    - name: Patch images
+      run: |
+        mkdir mnt_system mnt_product
+
+        if [ -f extracted/system.img ]; then
+          sudo mount -o loop extracted/system.img mnt_system
+        fi
+
+        if [ -f extracted/product.img ]; then
+          sudo mount -o loop extracted/product.img mnt_product
+        fi
+
+        # Carrier config
+        sudo mkdir -p mnt_system/etc/CarrierSettings
+        echo '<carrier_config_list><carrier_config><mcc>250</mcc><bool name="carrier_volte_available_bool">true</bool><bool name="carrier_wfc_ims_available_bool">true</bool></carrier_config></carrier_config_list>' \
+          | sudo tee mnt_system/etc/CarrierSettings/ims_ru.xml
+
+        # props
+        if [ -f mnt_system/build.prop ]; then
+          echo "persist.dbg.volte_avail_ovr=1" | sudo tee -a mnt_system/build.prop
+          echo "persist.dbg.wfc_avail_ovr=1" | sudo tee -a mnt_system/build.prop
+        fi
+
+        sudo umount mnt_system || true
+        sudo umount mnt_product || true
+
+    - name: Package result
+      run: |
+        mkdir result
+        cp extracted/*.img result/ || true

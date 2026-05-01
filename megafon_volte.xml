@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<carrier_config_list>
+  <carrier_config>
+    <mcc>250</mcc><mnc>02</mnc>
+    <bool name="carrier_volte_available_bool">true</bool>
+    <bool name="carrier_volte_provisioning_required_bool">false</bool>
+    <bool name="carrier_volte_tty_supported_bool">true</bool>
+    <bool name="enhanced_4g_lte_on_by_default_bool">true</bool>
+    <bool name="carrier_allow_turnoff_ims_bool">false</bool>
+    <bool name="carrier_wfc_ims_available_bool">true</bool>
+    <bool name="carrier_wfc_supports_wifi_only_bool">true</bool>
+    <int name="carrier_default_wfc_ims_mode_int">2</int>
+    <bool name="carrier_wfc_ims_enabled_bool">true</bool>
+    <bool name="carrier_volte_provisioned_bool">true</bool>
+    <bool name="carrier_wfc_ims_require_presub_bool">false</bool>
+  </carrier_config>
+</carrier_config_list>

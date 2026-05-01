@@ -160,6 +160,9 @@ jobs:
         fi
         echo "✅ system.img: $(ls -lh system.img)"
 
+    - name: Checkout репозитория (для доступа к файлам патча)
+      uses: actions/checkout@v4
+
     - name: "[payload] Монтируем system.img и патчим"
       if: env.FORMAT == 'payload'
       run: |
@@ -177,51 +180,12 @@ jobs:
         sudo mkdir -p mnt/system/product/etc/CarrierSettings || true
         sudo mkdir -p mnt/system/etc/default-permissions || true
 
-        python3 - << 'PYEOF'
-        import subprocess
+        sudo cp .github/files/megafon_volte.xml \
+          mnt/system/product/etc/CarrierSettings/megafon_volte.xml
+        sudo cp .github/files/megafon_ims.xml \
+          mnt/system/etc/default-permissions/megafon-ims.xml
 
-        carrier = """<?xml version="1.0" encoding="UTF-8"?>
-<carrier_config_list>
-  <carrier_config>
-    <mcc>250</mcc><mnc>02</mnc>
-    <bool name="carrier_volte_available_bool">true</bool>
-    <bool name="carrier_volte_provisioning_required_bool">false</bool>
-    <bool name="carrier_volte_tty_supported_bool">true</bool>
-    <bool name="enhanced_4g_lte_on_by_default_bool">true</bool>
-    <bool name="carrier_allow_turnoff_ims_bool">false</bool>
-    <bool name="carrier_wfc_ims_available_bool">true</bool>
-    <bool name="carrier_wfc_supports_wifi_only_bool">true</bool>
-    <int name="carrier_default_wfc_ims_mode_int">2</int>
-    <bool name="carrier_wfc_ims_enabled_bool">true</bool>
-    <bool name="carrier_volte_provisioned_bool">true</bool>
-    <bool name="carrier_wfc_ims_require_presub_bool">false</bool>
-  </carrier_config>
-</carrier_config_list>"""
-
-        permissions = """<?xml version="1.0" encoding="utf-8"?>
-<exceptions>
-  <exception package="com.android.phone">
-    <permission name="android.permission.MODIFY_PHONE_STATE" fixed="true"/>
-  </exception>
-</exceptions>"""
-
-        files = {
-            "mnt/system/product/etc/CarrierSettings/megafon_volte.xml": carrier,
-            "mnt/system/etc/default-permissions/megafon-ims.xml": permissions,
-        }
-
-        for path, content in files.items():
-            proc = subprocess.run(
-                ["sudo", "tee", path],
-                input=content.encode(),
-                capture_output=True
-            )
-            if proc.returncode == 0:
-                print(f"✅ Записан: {path}")
-            else:
-                print(f"❌ Ошибка: {path} — {proc.stderr.decode()}")
-                exit(1)
-        PYEOF
+        echo "✅ Файлы скопированы"
 
         sudo find mnt/system -name "build.prop" 2>/dev/null
         for BUILDPROP in \

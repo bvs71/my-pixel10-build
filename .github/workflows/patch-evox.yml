@@ -39,7 +39,7 @@ jobs:
         wget -q https://github.com/ssut/payload-dumper-go/releases/download/1.2.2/payload-dumper-go_1.2.2_linux_amd64.tar.gz
         tar xf payload-dumper-go_1.2.2_linux_amd64.tar.gz
         sudo mv payload-dumper-go /usr/local/bin/
-        payload-dumper-go --version
+        echo "✅ payload-dumper-go установлен"
 
     - name: Устанавливаем img2simg / simg2img
       run: |

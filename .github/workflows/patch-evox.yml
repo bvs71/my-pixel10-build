@@ -1,80 +1,103 @@
-- name: Apply VoLTE/VoWiFi patch
+- name: IMS Production Enabler (VoLTE + VoWiFi RU)
   run: |
     set -e
 
-    echo "FORMAT=${{ env.FORMAT }}"
+    ROOT="${{ env.ROOT }}"
+
+    echo "📡 IMS ENABLER ROOT=$ROOT"
 
     # ─────────────────────────────
-    # FIX 1: SAFE ROOT SELECTION
-    # ─────────────────────────────
-
-    ROOT="rom"
-    if [ "${{ env.FORMAT }}" = "payload" ]; then
-      ROOT="extracted"
-    fi
-
-    echo "📁 ROOT=$ROOT"
-
-    # ─────────────────────────────
-    # FIX 2: SAFE DIRS (NO FAIL)
+    # 1. DIRECTORIES
     # ─────────────────────────────
 
     mkdir -p "$ROOT/system/etc/CarrierSettings"
     mkdir -p "$ROOT/system/etc/default-permissions"
+    mkdir -p "$ROOT/system/product/etc/permissions"
 
     # ─────────────────────────────
-    # FIX 3: NO HEREDOC (YAML SAFE)
+    # 2. CARRIER CONFIG (CORE IMS POLICY)
     # ─────────────────────────────
 
-    printf '%s\n' \
-'<?xml version="1.0" encoding="UTF-8"?>' \
-'<carrier_config_list>' \
-'  <carrier_config>' \
-'    <mcc>250</mcc>' \
-'    <bool name="carrier_volte_available_bool">true</bool>' \
-'    <bool name="carrier_wfc_ims_available_bool">true</bool>' \
-'    <bool name="enhanced_4g_lte_on_by_default_bool">true</bool>' \
-'    <bool name="ims_service_enable_bool">true</bool>' \
-'    <int name="carrier_default_wfc_ims_mode_int">2</int>' \
-'  </carrier_config>' \
-'</carrier_config_list>' \
-> "$ROOT/system/etc/CarrierSettings/ru_volte.xml"
+    cat > "$ROOT/system/etc/CarrierSettings/ims_ru.xml" << 'EOF'
+<?xml version="1.0" encoding="UTF-8"?>
+<carrier_config_list>
+  <carrier_config>
+    <mcc>250</mcc>
+
+    <!-- VoLTE -->
+    <bool name="carrier_volte_available_bool">true</bool>
+    <bool name="carrier_volte_provisioning_required_bool">false</bool>
+    <bool name="enhanced_4g_lte_on_by_default_bool">true</bool>
+
+    <!-- VoWiFi -->
+    <bool name="carrier_wfc_ims_available_bool">true</bool>
+    <bool name="carrier_wfc_supports_wifi_only_bool">true</bool>
+    <bool name="carrier_wfc_supports_wifi_preferred_bool">true</bool>
+    <int name="carrier_default_wfc_ims_mode_int">2</int>
+
+    <!-- IMS CORE -->
+    <bool name="ims_service_enable_bool">true</bool>
+    <bool name="carrier_allow_turnoff_ims_bool">false</bool>
+
+  </carrier_config>
+</carrier_config_list>
+EOF
 
     # ─────────────────────────────
-    # FIX 4: IMS PERMISSIONS (SAFE PRINTF)
+    # 3. IMS PERMISSIONS (CRITICAL FIX)
     # ─────────────────────────────
 
-    printf '%s\n' \
-'<exceptions>' \
-'  <exception package="com.android.phone">' \
-'    <permission name="android.permission.MODIFY_PHONE_STATE" fixed="true"/>' \
-'  </exception>' \
-'  <exception package="com.android.ims">' \
-'    <permission name="android.permission.READ_PHONE_STATE" fixed="true"/>' \
-'  </exception>' \
-'</exceptions>' \
-> "$ROOT/system/etc/default-permissions/ims.xml"
+    cat > "$ROOT/system/etc/default-permissions/ims.xml" << 'EOF'
+<exceptions>
+  <exception package="com.android.phone">
+    <permission name="android.permission.MODIFY_PHONE_STATE" fixed="true"/>
+  </exception>
+
+  <exception package="com.android.ims">
+    <permission name="android.permission.READ_PHONE_STATE" fixed="true"/>
+    <permission name="android.permission.READ_PRIVILEGED_PHONE_STATE" fixed="true"/>
+  </exception>
+
+  <exception package="com.android.server.telecom">
+    <permission name="android.permission.MODIFY_PHONE_STATE" fixed="true"/>
+  </exception>
+</exceptions>
+EOF
 
     # ─────────────────────────────
-    # FIX 5: SAFE PROPS PATCH (NO DUPLICATES)
+    # 4. TELEPHONY FEATURES (FRAMEWORK SIGNAL)
+    # ─────────────────────────────
+
+    cat > "$ROOT/system/product/etc/permissions/ims_features.xml" << 'EOF'
+<permissions>
+  <feature name="android.hardware.telephony.ims"/>
+  <feature name="android.hardware.telephony.calling"/>
+  <feature name="android.software.vr.high_performance"/>
+</permissions>
+EOF
+
+    # ─────────────────────────────
+    # 5. PROPERTIES (IMS + IWLAN STACK)
     # ─────────────────────────────
 
     for F in "$ROOT/system/build.prop" "$ROOT/vendor/build.prop"; do
       [ -f "$F" ] || continue
 
-      echo "🛠 patching $F"
-
       sed -i '/persist.dbg.volte_avail_ovr/d' "$F" || true
       sed -i '/persist.dbg.wfc_avail_ovr/d' "$F" || true
       sed -i '/persist.data.iwlan.enable/d' "$F" || true
+      sed -i '/persist.ims.volte_enable/d' "$F" || true
 
       cat >> "$F" << EOF
 
+# IMS ENABLER
 persist.dbg.volte_avail_ovr=1
 persist.dbg.wfc_avail_ovr=1
 persist.data.iwlan.enable=true
 persist.ims.volte_enable=1
+persist.ims.vt_enable=1
+persist.ims.wfc_enable=1
 EOF
     done
 
-    echo "✅ PATCH COMPLETE"
+    echo "✅ IMS PRO ENABLER APPLIED"

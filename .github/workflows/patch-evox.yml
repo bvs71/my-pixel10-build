@@ -163,9 +163,10 @@ jobs:
     - name: "[payload] Монтируем system.img и патчим"
       if: env.FORMAT == 'payload'
       run: |
+        set +e   # не падаем на ошибках mkdir
         mkdir -p mnt/system
+        set -e   # возвращаем строгий режим после mount
         
-        # Увеличиваем образ на 50MB чтобы было место для наших файлов
         e2fsck -f extracted/system.img || true
         resize2fs extracted/system.img $(( $(du -m extracted/system.img | cut -f1) + 50 ))M
         
@@ -175,7 +176,6 @@ jobs:
         }
         df -h mnt/system
 
-        # mkdir только если папок ещё нет
         sudo mkdir -p mnt/system/etc/CarrierSettings
         sudo mkdir -p mnt/system/etc/default-permissions
 

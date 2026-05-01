@@ -148,7 +148,11 @@ jobs:
         mkdir extracted
         payload-dumper-go -o extracted payload_dir/payload.bin
         ls -lh extracted/
-
+    - name: "[payload] Ищем где лежат образы"
+      if: env.FORMAT == 'payload'
+      run: |
+        find . -name "system.img" 2>/dev/null
+        find . -name "product.img" 2>/dev/null
     - name: "[payload] Конвертируем system.img из sparse"
       if: env.FORMAT == 'payload'
       run: |
@@ -167,24 +171,24 @@ jobs:
       if: env.FORMAT == 'payload'
       run: |
         set +e
-        e2fsck -f extracted/product.img
-        e2fsck -f extracted/system.img
+        e2fsck -f product.img
+        e2fsck -f system.img
         set -e
 
         # Увеличиваем оба образа
-        resize2fs extracted/product.img $(( $(du -m extracted/product.img | cut -f1) + 50 ))M
-        resize2fs extracted/system.img $(( $(du -m extracted/system.img | cut -f1) + 50 ))M
+        resize2fs product.img $(( $(du -m product.img | cut -f1) + 50 ))M
+        resize2fs system.img $(( $(du -m system.img | cut -f1) + 50 ))M
 
         # Монтируем product.img для CarrierSettings
         mkdir -p mnt/product
-        sudo mount -o loop,rw extracted/product.img mnt/product || {
+        sudo mount -o loop,rw product.img mnt/product || {
           echo "❌ mount product не удался"
           exit 1
         }
 
         # Монтируем system.img для build.prop и permissions
         mkdir -p mnt/system
-        sudo mount -o loop,rw extracted/system.img mnt/system || {
+        sudo mount -o loop,rw system.img mnt/system || {
           echo "❌ mount system не удался"
           exit 1
         }

@@ -50,18 +50,15 @@ jobs:
     - name: Скачиваем Evolution X с Google Drive
       run: |
         FILE_ID="${{ github.event.inputs.GDRIVE_FILE_ID }}"
-        
-        # Устанавливаем gdown — надёжный инструмент для Google Drive
         pip3 install -q gdown
         
         echo "⬇️ Скачиваем с Google Drive (ID: $FILE_ID)..."
         gdown "https://drive.google.com/uc?id=$FILE_ID" -O evox.zip
         
         ls -lh evox.zip
-        # Проверяем что скачался ZIP а не страница с капчей
-        file evox.zip | grep -q "Zip" || {
-          echo "❌ Скачался не ZIP — возможно сработала капча Google"
-          cat evox.zip | head -5
+        # Проверяем по сигнатуре PK (magic bytes любого ZIP)
+        xxd evox.zip | head -1 | grep -q "504b" || {
+          echo "❌ Файл не является ZIP-архивом"
           exit 1
         }
         echo "✅ Файл скачан успешно"
